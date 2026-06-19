@@ -166,3 +166,36 @@ func TestChunkFile(t *testing.T) {
 // PASS
 // ok      riddhi/chunking 0.007s
 }
+
+func BenchmarkSequential(b *testing.B) {
+
+    chunker := DefaultFileChunker{
+        chunkSize: 32768,
+    }
+
+    for i := 0; i < b.N; i++ {
+        chunker.ChunkFile("large.bin")
+    }
+//     === RUN   BenchmarkSequential
+// BenchmarkSequential
+// BenchmarkSequential-12            284287      4429 ns/op       64 B/op          2 allocs/op
+// PASS
+// ok      riddhi/chunking 1.320s,1.216s...everytime different
+}
+
+func BenchmarkParallel(b *testing.B) {
+
+    chunker := DefaultFileChunker{
+        chunkSize: 32768,
+    }
+
+    for i := 0; i < b.N; i++ {
+        chunker.ChunklargeFile("large.bin")
+    }
+//     === RUN   BenchmarkParallel
+// BenchmarkParallel
+// BenchmarkParallel-12              283845      4435 ns/op      112 B/op          5 allocs/op
+// PASS
+// ok      riddhi/chunking 1.318s,1.250s,1.245s everytime different
+
+}
