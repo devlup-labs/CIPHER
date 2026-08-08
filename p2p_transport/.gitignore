@@ -1,0 +1,19 @@
+bin/
+test_files/
+downloads/
+# Manual test files
+content_store/
+sample.txt
+restored.txt
+test_manifest.json
+test_files/
+*.mp4
+
+# Test Artifacts
+.gocache/
+store*
+.finalStore
+*.bin
+*.log
+run_*.sh
+temp
