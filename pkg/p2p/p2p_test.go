@@ -40,7 +40,7 @@ func TestP2PLoopback(t *testing.T) {
 
 	var fileID [32]byte
 	store := &engine.ChunkStore{FileID: fileID, Chunks: chunks, MerkleTree: tree}
-	providerHost.SetStreamHandler(ProtocolID, ProviderStreamHandler(store))
+	providerHost.SetStreamHandler(ProtocolID, ProviderStreamHandler(store,providerHost))
 
 	// 2. Setup client
 	clientOpts := HostOptions{ListenPort: 0, PrivKeyPath: "", EnableMDNS: false}
@@ -109,7 +109,7 @@ func TestP2PRelay(t *testing.T) {
 
 	var fileID [32]byte
 	store := &engine.ChunkStore{FileID: fileID, Chunks: chunks, MerkleTree: tree}
-	providerHost.SetStreamHandler(ProtocolID, ProviderStreamHandler(store))
+	providerHost.SetStreamHandler(ProtocolID, ProviderStreamHandler(store,providerHost))
 
 	// Wait a bit for relay reservation to settle
 	importTime := time.Millisecond * 500

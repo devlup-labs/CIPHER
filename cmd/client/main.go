@@ -1,18 +1,22 @@
-package main
+ package main
 
 import (
 	"context"
 	"encoding/hex"
 	"flag"
 	"os"
+	//"time"
 
 	"github.com/1amKhush/CIPHER/pkg/logger"
 	"github.com/1amKhush/CIPHER/pkg/p2p"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
+	
+	 
 )
 
 func main() {
+	//used to parse command-line argument
 	providerAddr := flag.String("provider", "", "Provider multiaddr")
 	rootHex := flag.String("root", "", "Merkle root in hex")
 	chunksCount := flag.Uint64("chunks", 4, "Number of chunks to download")
@@ -21,7 +25,7 @@ func main() {
 	enableQUIC := flag.Bool("quic", false, "Enable QUIC transport")
 	enableMDNS := flag.Bool("mdns", true, "Enable mDNS discovery")
 	flag.Parse()
-
+	
 	cfg := logger.DefaultConfig()
 	if *verbose {
 		cfg.Level = "debug"
@@ -86,7 +90,13 @@ func main() {
 		plaintext, err := p2p.RequestChunk(requestCtx, h, info.ID, fileID, merkleRoot, i, privKey)
 		cancelRequest()
 		if err != nil {
-			logger.Fatal().Err(err).Msgf("Failed to request chunk %d", i)
+		logger.Error().
+			Err(err).
+			Msgf("Failed to request chunk %d", i)
+
+		//time.Sleep(40 * time.Second)
+
+		return
 		}
 
 		if _, err := outFile.Write(plaintext); err != nil {

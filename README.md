@@ -13,6 +13,7 @@ Whether you're behind a restrictive NAT or simply want to share data without rel
 *   **Cryptographic Integrity**: Keccak256-based Merkle trees guarantee that every byte received is exactly what was requested.
 *   **Secure Transport**: All file chunks are encrypted in transit using robust XChaCha20-Poly1305 symmetric authenticated encryption.
 *   **Multi-Protocol**: Automatically negotiates the best connection via QUIC, TCP, or Secure WebSockets.
+* **Ethereum-ready Incentives**: Providers are registered with an Ethereum identity, with MVP support for provider registration, staking, and challenge handling. These components currently use in-memory state for local testing and are intended to be replaced by Ethereum smart contracts.
 
 ##  Usage
 

@@ -12,6 +12,8 @@ import (
 	p2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/1amKhush/CIPHER/pkg/ethereum"
 )
 
 // RequestChunk performs the full 4-message handshake for one chunk.
@@ -27,7 +29,13 @@ func RequestChunk(ctx context.Context, h host.Host, providerID peer.ID,
 		deadline, _ = ctx.Deadline()
 	}
 
-	s, err := h.NewStream(ctx, providerID, ProtocolID)
+	streamCtx := network.WithAllowLimitedConn(ctx, "cipher-chunk") //for *limited connection
+
+	s, err := h.NewStream(
+		streamCtx,
+		providerID,
+		ProtocolID,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open stream: %w", err)
 	}
@@ -100,11 +108,49 @@ func RequestChunk(ctx context.Context, h host.Host, providerID peer.ID,
 		return nil, fmt.Errorf("failed to send LotteryTicket: %w", err)
 	}
 
+
+	// Wait only a limited amount of time for the provider
+	// to reveal the decryption key.
+	//
+	// MVP:
+	// We use a local timeout.
+	//
+	// TODO:
+	// Replace this timeout with the challenge deadline
+	// enforced by the Ethereum smart contract.
+	
+	if err := s.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		s.Reset()
+		return nil, fmt.Errorf("failed to set read deadline: %w", err)
+	}
+
 	// 5. Read KeyReveal
 	revealData, err := wire.ReadMsg(s)
 	if err != nil {
-		s.Reset()
-		return nil, fmt.Errorf("failed to read KeyReveal: %w", err)
+
+    // MVP:
+    // The provider failed to reveal the decryption key.
+    // Create an off-chain challenge.
+    //
+    // TODO:
+    // Replace this with:
+    //
+    //      contract.challenge(providerID)
+    //
+    // on the Ethereum smart contract.
+    if challengeErr := ethereum.CreateChallenge(providerID.String(), 30*time.Second); challengeErr != nil {
+        return nil, fmt.Errorf(
+            "failed to read KeyReveal and failed to create challenge: %v",
+            challengeErr,
+        )
+    }
+
+    s.Reset()
+
+    return nil, fmt.Errorf(
+        "provider failed to reveal key, challenge created: %w",
+        err,
+       )
 	}
 
 	var reveal wire.KeyReveal

@@ -7,10 +7,12 @@ import (
 	"github.com/1amKhush/CIPHER/pkg/logger"
 	"github.com/1amKhush/CIPHER/pkg/wire"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/1amKhush/CIPHER/pkg/ethereum"
 )
 
 // ProviderStreamHandler adapts the engine to a libp2p stream.
-func ProviderStreamHandler(store *engine.ChunkStore) network.StreamHandler {
+func ProviderStreamHandler(store *engine.ChunkStore, h host.Host) network.StreamHandler {
 	return func(s network.Stream) {
 		defer s.Close()
 		if err := s.SetDeadline(time.Now().Add(OperationTimeout)); err != nil {
@@ -76,11 +78,32 @@ func ProviderStreamHandler(store *engine.ChunkStore) network.StreamHandler {
 			return
 		}
 
+		// MVP testing only:
+		// Simulate a slow provider so the client timeout path can be exercised.
+		//
+		// Uncomment during local testing to trigger challenge creation.
+		// time.Sleep(35 * time.Second)
+
 		// 6. Send KeyReveal
 		if err := wire.WriteMsg(s, reveal.Marshal()); err != nil {
 			logger.Error().Err(err).Msg("Failed to write KeyReveal")
 			s.Reset()
 			return
+		}
+
+		// MVP:
+		// The provider successfully revealed the decryption key.
+		//
+		// If the client previously opened a challenge because the provider
+		// appeared offline, resolve it now.
+		//
+		// Future:
+		// Replace this local function with a smart-contract transaction
+		// that marks the challenge as resolved on-chain.
+		if err := ethereum.ResolveChallenge(h.ID().String()); err != nil {
+			logger.Warn().
+				Err(err).
+				Msg("No active challenge to resolve")
 		}
 	}
 }
