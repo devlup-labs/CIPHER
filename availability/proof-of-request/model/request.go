@@ -11,7 +11,6 @@ const (
 )
 
 type Request struct {
-	RequestID string
 	FileID    string
 	ClientID  string
 	Timestamp int64

@@ -23,10 +23,6 @@ func TestCreateRequest(t *testing.T) {
 		t.Errorf("expected ClientID %q, got %q", clientID, req.ClientID)
 	}
 
-	if req.RequestID == "" {
-		t.Error("expected RequestID to be generated")
-	}
-
 	if req.Timestamp == 0 {
 		t.Error("expected Timestamp to be generated")
 	}
@@ -60,12 +56,10 @@ func TestGetOrCreateRequestReusesPendingRequest(t *testing.T) {
 		t.Fatalf("second request failed: %v", err)
 	}
 
-	if req1.RequestID != req2.RequestID {
-		t.Errorf(
-			"expected existing request to be reused, got different RequestIDs: %s and %s",
-			req1.RequestID,
-			req2.RequestID,
-		)
+	if req1.FileID != req2.FileID ||
+		req1.ClientID != req2.ClientID ||
+		req1.Timestamp != req2.Timestamp {
+		t.Error("expected existing pending request to be reused")
 	}
 }
 
@@ -75,11 +69,8 @@ func TestGetOrCreateRequestCreatesNewRequestAfterResolution(t *testing.T) {
 		t.Fatalf("first request failed: %v", err)
 	}
 
-	// Mark the existing request as resolved.
-	for i := range requests {
-		if requests[i].RequestID == req1.RequestID {
-			requests[i].Status = model.Resolved
-		}
+	if !ResolveRequest(req1.FileID, req1.ClientID) {
+		t.Fatal("expected pending request to be resolved")
 	}
 
 	req2, err := GetOrCreateRequest("file-789", "client-101")
@@ -87,11 +78,16 @@ func TestGetOrCreateRequestCreatesNewRequestAfterResolution(t *testing.T) {
 		t.Fatalf("second request failed: %v", err)
 	}
 
-	if req1.RequestID == req2.RequestID {
-		t.Error("expected a new RequestID after the previous request was resolved")
-	}
-
 	if req2.Status != model.Pending {
 		t.Errorf("expected new request to be pending, got %s", req2.Status)
+	}
+}
+
+// test ResolveRequest returns false if no pending request exists
+func TestResolveRequestReturnsFalseWhenRequestDoesNotExist(t *testing.T) {
+	resolved := ResolveRequest("file-does-not-exist", "client-does-not-exist")
+
+	if resolved {
+		t.Error("expected ResolveRequest to return false when no pending request exists")
 	}
 }
