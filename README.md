@@ -6,9 +6,9 @@ CIPHER is designed for content delivery and caching, not permanent decentralized
 
 ## Roles
 
-- **Publisher** — divides content into chunks, commits to them with a Merkle root, and signs that root.
+- **Publisher** — divides content into chunks, commits to them with a Merkle root, and replicates across providers.
 - **Provider** — advertises, caches, and serves publisher-authenticated content as an independent, permissionless node.
-- **Consumer** — discovers suitable providers, fetches content, and verifies chunks using Merkle proofs and the publisher signature.
+- **Consumer** — discovers suitable providers via DHT, fetches content, and verifies chunks using Merkle proofs and digests.
 
 Content authentication proves that a chunk belongs to publisher-authenticated content. It does not, by itself, prove delivery or receipt.
 
@@ -31,28 +31,72 @@ Smart contracts stay with the domain that owns their behavior:
 CIPHER/
 ├── docs/                   Protocol and architecture documentation
 ├── network/                Decentralized CDN networking
+│   ├── cmd/                Network services (bootstrap, relay, peer)
+│   ├── content/            Chunking, CAS storage, encryption, Merkle verification
+│   ├── discovery/          Kademlia DHT routing & provider discovery
+│   ├── distribution/       Multi-provider replication engine (circular stride)
+│   ├── protocol/           Wire protocols (/cipher/chunk/1.0.0, /cipher/push/1.0.0)
+│   ├── transfer/           Worker pool, transfer sessions, work-stealing scheduler
+│   └── transport/          libp2p host, stream, and circuit v2 relay management
 ├── availability/           Availability mechanisms
 │   └── contracts/          Availability-specific smart contracts
 ├── payments/               Economic settlement
 │   └── contracts/          Payment and escrow smart contracts
 ├── shared/                 Stable shared definitions and utilities
 ├── nodes/                  Publisher, provider, and consumer applications
+│   ├── publisher/          Content ingestion and remote push distributor
+│   ├── provider/           Decentralized storage node & chunk server
+│   └── consumer/           Content discovery, swarming download & reassembly
 ├── integration/            Cross-domain composition and adapters
 ├── tests/                  Cross-module and end-to-end tests
+│   ├── e2e/                Automated integration & lifecycle test scripts
+│   └── robustness/         Fuzzing & boundary verification tests
 ├── scripts/                Development and operational utilities
 ├── config/                 Shared configuration templates
 └── docker/                 Optional local container environment
 ```
 
-## Dependency philosophy
+## Quick Start
 
-- Keep `network`, `availability`, and `payments` independently implementable.
-- Communicate through small, stable protocol objects or interfaces.
-- Put only genuinely shared definitions in `shared`; it is not a business-logic catch-all.
-- Coordinate cross-domain workflows in `integration` instead of coupling domain internals.
-- Compose domain functionality into runnable roles under `nodes`.
-- Keep availability decisions separate from payment settlement.
+### 1. Build Binaries
+```bash
+# Build all nodes and network services
+go build -o bin/publisher ./nodes/publisher
+go build -o bin/provider ./nodes/provider
+go build -o bin/consumer ./nodes/consumer
+go build -o bin/bootstrap ./network/cmd/bootstrap
+go build -o bin/relay ./network/cmd/relay
+```
 
-## Project status
+### 2. Run Tests
+```bash
+# Run all unit tests
+CGO_ENABLED=0 go test ./network/...
 
-This branch establishes the repository foundation only. Domain teams should define their internal structures as implementation decisions are made; the complete protocol is intentionally not implemented here.
+# Run End-to-End Multi-Provider Replication Test
+./tests/e2e/remote_push_e2e.sh
+
+# Run Role-Based DHT Swarming Test
+./tests/e2e/roles_e2e.sh
+
+# Run Provider Persistence & Independence Test
+./tests/e2e/provider_lifecycle_e2e.sh
+```
+
+### 3. Running Nodes in Production / Staging
+```bash
+# Start DHT Bootstrap Node
+./bin/bootstrap -p 4003
+
+# Start Circuit Relay v2 Node
+./bin/relay
+
+# Start Provider Node
+./bin/provider -p 4101 -store ./p1_store -bootstrap "<BOOTSTRAP_MULTIADDR>" -relay "<RELAY_MULTIADDR>" -allow-push=true
+
+# Publish & Push Content Across Providers with Replication R=2
+./bin/publisher -file ./sample.mp4 -bootstrap "<BOOTSTRAP_MULTIADDR>" -replication 2 -push
+
+# Download Content as a Consumer
+./bin/consumer -fetch "<CONTENT_ID>" -key "<KEY>" -out ./downloaded.mp4 -bootstrap "<BOOTSTRAP_MULTIADDR>"
+```
