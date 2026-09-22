@@ -8,6 +8,8 @@ type RequestStatus string
 const (
 	Pending  RequestStatus = "pending"
 	Resolved RequestStatus = "resolved"
+	Aborted  RequestStatus = "aborted"
+	Expired  RequestStatus = "expired"
 )
 
 type Request struct {
@@ -15,4 +17,10 @@ type Request struct {
 	ClientID  string
 	Timestamp int64
 	Status    RequestStatus
+}
+
+type RequestRecord struct {
+	FileID    string
+	ClientID  string
+	Timestamp int64
 }

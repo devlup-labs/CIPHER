@@ -3,115 +3,140 @@ package request
 import (
 	"proof-of-request/model"
 	"testing"
+	"time"
 )
 
-func TestCreateRequest(t *testing.T) {
-	fileID := "file-123"
-	clientID := "client-456"
-
-	req, err := CreateRequest(fileID, clientID)
-
-	if err != nil {
-		t.Fatalf("CreateRequest() returned an error: %v", err)
-	}
-
-	if req.FileID != fileID {
-		t.Errorf("expected FileID %q, got %q", fileID, req.FileID)
-	}
-
-	if req.ClientID != clientID {
-		t.Errorf("expected ClientID %q, got %q", clientID, req.ClientID)
-	}
-
-	if req.Timestamp == 0 {
-		t.Error("expected Timestamp to be generated")
-	}
+func resetRequests() {
+	requests = nil
 }
+func TestCreateRequest(t *testing.T) {
+	resetRequests()
+	req, err := CreateRequest("file-123", "client-456")
 
-// input preservation
-func TestCreateRequestPreservesInput(t *testing.T) {
-	req, err := CreateRequest("file-A", "client-B")
 	if err != nil {
 		t.Fatalf("CreateRequest() failed: %v", err)
 	}
 
-	if req.FileID != "file-A" {
-		t.Errorf("expected FileID file-A, got %s", req.FileID)
-	}
-
-	if req.ClientID != "client-B" {
-		t.Errorf("expected ClientID client-B, got %s", req.ClientID)
+	if req.FileID != "file-123" ||
+		req.ClientID != "client-456" ||
+		req.Status != model.Pending ||
+		req.Timestamp == 0 {
+		t.Error("created request has incorrect fields")
 	}
 }
 
-// test GetOrCreateRequest returns existing request if it exists
-func TestGetOrCreateRequestReusesPendingRequest(t *testing.T) {
-	req1, _, err := GetOrCreateRequest("file-123", "client-456")
+func TestGetOrCreateRequestLifecycle(t *testing.T) {
+	resetRequests()
+	lifetime := time.Hour
+
+	// First call should create a new request.
+	req1, isNew, err := GetOrCreateRequest("file-123", "client-456", lifetime)
 	if err != nil {
 		t.Fatalf("first request failed: %v", err)
 	}
 
-	req2, _, err := GetOrCreateRequest("file-123", "client-456")
+	if !isNew {
+		t.Error("expected first request to be new")
+	}
+
+	// Second call should reuse the same pending request.
+	req2, isNew, err := GetOrCreateRequest("file-123", "client-456", lifetime)
 	if err != nil {
 		t.Fatalf("second request failed: %v", err)
 	}
 
-	if req1.FileID != req2.FileID ||
-		req1.ClientID != req2.ClientID ||
-		req1.Timestamp != req2.Timestamp {
+	if isNew || req1 != req2 {
 		t.Error("expected existing pending request to be reused")
 	}
-}
 
-func TestGetOrCreateRequestCreatesNewRequestAfterResolution(t *testing.T) {
-	req1, _, err := GetOrCreateRequest("file-789", "client-101")
-	if err != nil {
-		t.Fatalf("first request failed: %v", err)
-	}
-
+	// Resolve the request.
 	if !ResolveRequest(req1.FileID, req1.ClientID) {
 		t.Fatal("expected pending request to be resolved")
 	}
 
-	req2, _, err := GetOrCreateRequest("file-789", "client-101")
+	// After resolution, a new request should be created.
+	req3, isNew, err := GetOrCreateRequest("file-123", "client-456", lifetime)
+	if err != nil {
+		t.Fatalf("third request failed: %v", err)
+	}
+
+	if !isNew || req3.Status != model.Pending {
+		t.Error("expected a new pending request after resolution")
+	}
+}
+
+func TestGetOrCreateRequestExpiresOldRequest(t *testing.T) {
+	resetRequests()
+	// Create a request with a very short lifetime.
+	req1, _, err := GetOrCreateRequest("file-expire", "client-expire", time.Nanosecond)
+	if err != nil {
+		t.Fatalf("first request failed: %v", err)
+	}
+
+	// Wait until the request is outside its lifetime.
+	time.Sleep(time.Millisecond)
+
+	req2, isNew, err := GetOrCreateRequest("file-expire", "client-expire", time.Nanosecond)
 	if err != nil {
 		t.Fatalf("second request failed: %v", err)
+	}
+
+	if !isNew {
+		t.Error("expected expired request to produce a new request")
 	}
 
 	if req2.Status != model.Pending {
 		t.Errorf("expected new request to be pending, got %s", req2.Status)
 	}
-}
 
-// test ResolveRequest returns false if no pending request exists
-func TestResolveRequestReturnsFalseWhenRequestDoesNotExist(t *testing.T) {
-	resolved := ResolveRequest("file-does-not-exist", "client-does-not-exist")
+	// The old request should no longer be pending.
+	if requests[0].Status != model.Expired {
+		t.Errorf("expected old request to be expired, got %s", requests[0].Status)
+	}
 
-	if resolved {
-		t.Error("expected ResolveRequest to return false when no pending request exists")
+	if req1 == req2 {
+		t.Error("expected a different request after expiration")
 	}
 }
 
-func TestGetOrCreateRequestIdentifiesNewRequest(t *testing.T) {
-	req1, isNew1, err := GetOrCreateRequest("file-1", "client-1")
+func TestAbortRequest(t *testing.T) {
+	resetRequests()
+	req, _, err := GetOrCreateRequest("file-abort", "client-abort", time.Hour)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("request creation failed: %v", err)
 	}
 
-	if !isNew1 {
-		t.Fatal("expected first request to be new")
+	if !AbortRequest(req.FileID, req.ClientID) {
+		t.Fatal("expected pending request to be aborted")
 	}
 
-	req2, isNew2, err := GetOrCreateRequest("file-1", "client-1")
+	// An aborted request should allow a new request to be created.
+	newReq, isNew, err := GetOrCreateRequest(req.FileID, req.ClientID, time.Hour)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("new request failed: %v", err)
 	}
 
-	if isNew2 {
-		t.Fatal("expected second request to reuse pending request")
+	if !isNew || newReq.Status != model.Pending {
+		t.Error("expected new pending request after abort")
+	}
+}
+
+func TestResolveAndAbortReturnFalseWithoutPendingRequest(t *testing.T) {
+	resetRequests()
+	if ResolveRequest("missing-file", "missing-client") {
+		t.Error("expected ResolveRequest to return false")
 	}
 
-	if req1 != req2 {
-		t.Fatal("expected same pending request")
+	if AbortRequest("missing-file", "missing-client") {
+		t.Error("expected AbortRequest to return false")
+	}
+}
+
+func TestGetOrCreateRequestRejectsInvalidLifetime(t *testing.T) {
+	resetRequests()
+	_, _, err := GetOrCreateRequest("file-123", "client-456", 0)
+
+	if err == nil {
+		t.Error("expected error for non-positive lifetime")
 	}
 }
