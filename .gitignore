@@ -29,3 +29,4 @@ coverage/
 # Common dependency caches
 node_modules/
 target/
+.gocache/
