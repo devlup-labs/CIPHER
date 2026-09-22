@@ -128,12 +128,11 @@ contract ChunkDisputeResolver is IDisputeResolver {
      * @notice Resolves expired dispute: slashes provider stake and voids the round.
      */
     function resolveExpiredDispute(
+        address sender,
         address recipient,
         uint256 roundId,
         uint256 localIndex
     ) external override {
-        // Anyone can call after deadline
-        address sender = msg.sender;
         bytes32 dKey = _disputeKey(sender, recipient, roundId, localIndex);
         Dispute storage dispute = disputes[dKey];
 

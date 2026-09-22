@@ -68,6 +68,7 @@ interface IDisputeResolver {
     ) external;
 
     function resolveExpiredDispute(
+        address sender,
         address recipient,
         uint256 roundId,
         uint256 localIndex
