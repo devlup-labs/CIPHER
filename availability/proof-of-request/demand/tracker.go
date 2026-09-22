@@ -3,6 +3,7 @@ package demand
 import (
 	"proof-of-request/model"
 	"sync"
+	"time"
 )
 
 var (
@@ -10,24 +11,31 @@ var (
 	records []model.Request
 )
 
-// RecordRequest stores an accepted request for demand tracking.
 func RecordRequest(req model.Request) {
 	mu.Lock()
 	defer mu.Unlock()
 
+	// Store the validated request for future demand calculation.
 	records = append(records, req)
 }
 
-func CalculateDemand(fileID string, startTime int64, endTime int64) int {
+func CalculateDemand(fileID string, window time.Duration) int {
 	mu.Lock()
 	defer mu.Unlock()
+
+	// Count only active, unfulfilled requests within the demand window.
+	cutoff := time.Now().Add(-window)
 
 	count := 0
 
 	for _, req := range records {
-		if req.FileID == fileID &&
-			req.Timestamp >= startTime &&
-			req.Timestamp < endTime {
+		if req.FileID != fileID || req.Status != model.Pending {
+			continue
+		}
+
+		requestTime := time.Unix(0, req.Timestamp)
+
+		if requestTime.After(cutoff) {
 			count++
 		}
 	}
