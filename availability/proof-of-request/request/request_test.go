@@ -46,12 +46,12 @@ func TestCreateRequestPreservesInput(t *testing.T) {
 
 // test GetOrCreateRequest returns existing request if it exists
 func TestGetOrCreateRequestReusesPendingRequest(t *testing.T) {
-	req1, err := GetOrCreateRequest("file-123", "client-456")
+	req1, _, err := GetOrCreateRequest("file-123", "client-456")
 	if err != nil {
 		t.Fatalf("first request failed: %v", err)
 	}
 
-	req2, err := GetOrCreateRequest("file-123", "client-456")
+	req2, _, err := GetOrCreateRequest("file-123", "client-456")
 	if err != nil {
 		t.Fatalf("second request failed: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestGetOrCreateRequestReusesPendingRequest(t *testing.T) {
 }
 
 func TestGetOrCreateRequestCreatesNewRequestAfterResolution(t *testing.T) {
-	req1, err := GetOrCreateRequest("file-789", "client-101")
+	req1, _, err := GetOrCreateRequest("file-789", "client-101")
 	if err != nil {
 		t.Fatalf("first request failed: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestGetOrCreateRequestCreatesNewRequestAfterResolution(t *testing.T) {
 		t.Fatal("expected pending request to be resolved")
 	}
 
-	req2, err := GetOrCreateRequest("file-789", "client-101")
+	req2, _, err := GetOrCreateRequest("file-789", "client-101")
 	if err != nil {
 		t.Fatalf("second request failed: %v", err)
 	}
@@ -89,5 +89,29 @@ func TestResolveRequestReturnsFalseWhenRequestDoesNotExist(t *testing.T) {
 
 	if resolved {
 		t.Error("expected ResolveRequest to return false when no pending request exists")
+	}
+}
+
+func TestGetOrCreateRequestIdentifiesNewRequest(t *testing.T) {
+	req1, isNew1, err := GetOrCreateRequest("file-1", "client-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !isNew1 {
+		t.Fatal("expected first request to be new")
+	}
+
+	req2, isNew2, err := GetOrCreateRequest("file-1", "client-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if isNew2 {
+		t.Fatal("expected second request to reuse pending request")
+	}
+
+	if req1 != req2 {
+		t.Fatal("expected same pending request")
 	}
 }
