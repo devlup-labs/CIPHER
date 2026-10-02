@@ -1,31 +1,34 @@
-# Local environment and secrets
-.env
-.env.*
-!.env.example
-*.key
-*.pem
+# Binaries
+bin/
 
-# Editors and operating systems
-.idea/
-.vscode/
-*.swp
-*.swo
+# OS Artifacts
 .DS_Store
-Thumbs.db
 
-# Logs and temporary files
+# Temporary Test Data
+*.bin
+*.dat
 *.log
 *.tmp
-tmp/
+*.key
+*.mp4
+my_file.txt
+sample.txt
+restored.txt
+test_manifest.json
+
+# Storage Directories
+*store*
+store/
+store_*/
+p1_store/
+p2_store/
+p3_store/
+content_store/
+client_store/
+test_files/
+downloads/
+.finalStore
 temp/
 
-# Generated build and test output
-bin/
-build/
-dist/
-out/
-coverage/
-
-# Common dependency caches
-node_modules/
-target/
+# Go Cache
+.gocache/
