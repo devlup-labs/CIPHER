@@ -5,11 +5,12 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
-	"log"
 	"math/big"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"cipher/network/content/core"
@@ -20,10 +21,12 @@ import (
 	"cipher/network/discovery"
 	"cipher/network/identity"
 	"cipher/network/payments"
+	"cipher/network/protocol/chunk"
 	"cipher/network/retrieval"
 	"cipher/network/transfer/manager"
 	"cipher/network/transfer/scheduler"
 	"cipher/network/transport"
+	"cipher/shared/logger"
 
 	"github.com/ethereum/go-ethereum/common"
 	golog "github.com/ipfs/go-log/v2"
@@ -34,6 +37,8 @@ import (
 
 func main() {
 	golog.SetAllLoggers(golog.LevelWarn)
+
+	log := logger.Consumer
 
 	fetchID := flag.String("fetch", "", "ContentID to fetch (hex)")
 	resumeID := flag.String("resume", "", "ContentID to resume downloading (hex)")
@@ -61,6 +66,9 @@ func main() {
 	providerEthAddr := flag.String("provider-eth-addr", "", "Provider Ethereum payout address (hex)")
 	roundID := flag.Int64("round-id", 1, "Payment round ID")
 	roundFaceValue := flag.String("round-face-value", "1000000000000000000", "Round face value in wei (default 1 ETH)")
+	roleName := flag.String("role-name", "Swarm Consumer Client", "Human-readable role name for this consumer node")
+	simulateCheat := flag.Bool("simulate-cheat", false, "Simulate malicious consumer generating forged/tampered EIP-712 payment tickets")
+	keepAlive := flag.Bool("keep-alive", false, "Keep consumer running as local edge seeder / in-memory cache after download")
 
 	flag.Parse()
 
@@ -95,7 +103,7 @@ func main() {
 		var cID core.ContentID
 		copy(cID[:], cIDBytes)
 		sm.Delete(cID)
-		fmt.Printf("Session %x cancelled.\n", cID)
+		log.Success("Session %x cancelled.", cID)
 		return
 	}
 
@@ -136,6 +144,14 @@ func main() {
 	defer h.Close()
 	defer kdht.Close()
 
+	fields := []logger.Field{
+		{Key: "Consumer Role   ", Value: *roleName},
+		{Key: "Consumer Peer ID", Value: h.ID().String()},
+		{Key: "Target ContentID", Value: targetContentIDHex},
+		{Key: "Cache Directory ", Value: *storePath},
+	}
+	log.Banner(fmt.Sprintf("CIPHER CONSUMER: %s", strings.ToUpper(*roleName)), fields...)
+
 	if *bootstrapAddr != "" {
 		bootstrapInfo, err := peer.AddrInfoFromString(*bootstrapAddr)
 		if err != nil {
@@ -144,7 +160,7 @@ func main() {
 		if err := discovery.Bootstrap(ctx, kdht, h, []peer.AddrInfo{*bootstrapInfo}); err != nil {
 			log.Fatalf("Failed to bootstrap DHT: %v", err)
 		}
-		log.Printf("[DHT] Bootstrap complete. Routing table has %d peers", len(kdht.RoutingTable().ListPeers()))
+		log.Sub("DHT").Success("Bootstrap complete. Routing table has %d peers", len(kdht.RoutingTable().ListPeers()))
 	}
 
 	if *relayAddr != "" {
@@ -169,7 +185,7 @@ func main() {
 
 	if *throttle == "2MB" {
 		scheduler.TestThrottle = 500 * time.Millisecond
-		log.Printf("[TESTING] Throttling enabled (2MB/s)")
+		log.Warn("[TESTING] Throttling enabled (2MB/s)")
 	}
 
 	t := transport.NewTransport(h)
@@ -177,7 +193,7 @@ func main() {
 
 	// 4. Control Plane: Resolve Providers (Direct or via DHT)
 	if *target != "" {
-		log.Printf("Connecting directly to target provider(s): %s", *target)
+		log.Info("Connecting directly to target provider(s): %s", *target)
 		for _, targetStr := range strings.Split(*target, ",") {
 			targetStr = strings.TrimSpace(targetStr)
 			if targetStr == "" {
@@ -185,7 +201,7 @@ func main() {
 			}
 			addrInfo, err := t.Connect(ctx, targetStr)
 			if err != nil {
-				log.Printf("Warning: Failed to connect to provider %s: %v", targetStr, err)
+				log.Warn("Failed to connect to provider %s: %v", targetStr, err)
 				continue
 			}
 			targetPeers = append(targetPeers, addrInfo.ID)
@@ -194,19 +210,19 @@ func main() {
 			log.Fatalf("Fatal: Could not connect to any specified target providers")
 		}
 	} else {
-		log.Printf("[DHT] Querying DHT control-plane for providers of ContentID %x...", contentID)
+		log.Sub("DHT").Info("Querying DHT control-plane for providers of ContentID %x...", contentID)
 		providers, err := discovery.FindProviders(ctx, kdht, contentID, 5)
 		if err != nil {
-			log.Fatalf("[DHT] Provider discovery failed: %v", err)
+			log.Sub("DHT").Fatalf("Provider discovery failed: %v", err)
 		}
 		if len(providers) == 0 {
-			log.Fatalf("[DHT] No providers found for ContentID %x on DHT", contentID)
+			log.Sub("DHT").Fatalf("No providers found for ContentID %x on DHT", contentID)
 		}
 
 		for _, p := range providers {
-			log.Printf("[DHT] Discovered provider: %s", p.ID)
+			log.Sub("DHT").Success("Discovered provider: %s", p.ID)
 			if err := t.ConnectPeer(ctx, p); err != nil {
-				log.Printf("[DHT] Failed to connect to provider %s: %v", p.ID, err)
+				log.Sub("DHT").Warn("Failed to connect to provider %s: %v", p.ID, err)
 				continue
 			}
 			targetPeers = append(targetPeers, p.ID)
@@ -226,20 +242,20 @@ func main() {
 	}
 
 	// 6. Data Plane: Resolve Manifest
-	log.Printf("Resolving manifest for ContentID %x from %d provider(s)...", contentID, len(targetPeers))
+	log.Info("Resolving manifest for ContentID %x from %d provider(s)...", contentID, len(targetPeers))
 	m, err := retrieval.ResolveManifest(ctx, contentID, kdht, t, eng, targetPeers)
 	if err != nil {
 		log.Fatalf("Failed to resolve manifest: %v", err)
 	}
-	log.Printf("[✓] Manifest resolved! Total chunks: %d", len(m.ChunkIDs))
+	log.Success("Manifest resolved! Total chunks: %d", len(m.ChunkIDs))
 
 	// 7. Data Plane: Parallel Swarming Chunk Download
-	log.Printf("Downloading %d chunks from %d provider(s)...", len(m.ChunkIDs), len(targetPeers))
+	log.Sub("Swarm").Info("Downloading %d chunks from %d provider(s)...", len(m.ChunkIDs), len(targetPeers))
 	tm := manager.NewTransferManager(sm, eng, t)
 
 	// Configure payment ticket generation if Ethereum parameters provided
 	if *ethRPC != "" && *ethKey != "" && *entropyAddr != "" && *providerEthAddr != "" {
-		log.Printf("[Payment] Initializing Ethereum client & EIP-712 ticket signer...")
+		log.Sub("Payment").Info("Initializing Ethereum client & EIP-712 ticket signer...")
 		payClient, err := payments.NewPaymentClient(ctx, *ethRPC, *ethKey, payments.ContractAddresses{
 			EntropySource: common.HexToAddress(*entropyAddr),
 		})
@@ -287,7 +303,16 @@ func main() {
 				return nil, fmt.Errorf("failed to sign ticket for chunk index %d: %w", idx, err)
 			}
 
-			log.Printf("[Payment] Generated & signed ticket for chunk #%d (sig: %x...)", idx, sig[:8])
+			if *simulateCheat {
+				// Deliberately tamper with signature bytes to simulate fraudulent/counterfeit payment ticket
+				for i := range sig {
+					sig[i] ^= 0xFF
+				}
+				log.Sub("Payment").Warn("[FRAUD SIMULATION] Generated FORGED/TAMPERED EIP-712 ticket (invalid sig: %x...)", sig[:8])
+			} else {
+				log.Sub("Payment").Info("Generated & signed authentic ticket for chunk #%d (sig: %x...)", idx, sig[:8])
+			}
+
 			return &payments.SignedTicket{
 				Ticket:    ticket,
 				Signature: sig,
@@ -298,12 +323,12 @@ func main() {
 	if err := tm.Download(ctx, contentID, m.ChunkIDs, targetPeers); err != nil {
 		log.Fatalf("Download failed: %v", err)
 	}
-	log.Printf("[✓] All %d chunks downloaded and verified successfully!", len(m.ChunkIDs))
+	log.Success("All %d chunks downloaded and verified successfully!", len(m.ChunkIDs))
 
 	// 8. Content Engine: Decrypt & Reassemble
 	if *reassembleOut != "" {
 		if *keyHex == "" {
-			log.Printf("Warning: No decryption key provided (-key). Attempting reassembly with cached keys...")
+			log.Warn("No decryption key provided (-key). Attempting reassembly with cached keys...")
 		}
 		outF, err := os.Create(*reassembleOut)
 		if err != nil {
@@ -314,6 +339,26 @@ func main() {
 		if err := eng.Reassemble(ctx, m, outF); err != nil {
 			log.Fatalf("Reassembly failed: %v", err)
 		}
-		log.Printf("[✓] Content decrypted and reassembled to: %s", *reassembleOut)
+		log.Success("Content decrypted and reassembled to: %s", *reassembleOut)
+	}
+
+	// 9. Keep-Alive P2P Edge Seeder & In-Memory Cache Mode
+	if *keepAlive {
+		chunk.NewStreamHandler(h, eng)
+		fields := []logger.Field{
+			{Key: "Consumer Role   ", Value: *roleName + " [ACTIVE SEEDER]"},
+			{Key: "Cache Directory ", Value: *storePath},
+			{Key: "Decrypted Output", Value: *reassembleOut},
+			{Key: "Cached Chunks   ", Value: fmt.Sprintf("%d chunks retained in local cache", len(m.ChunkIDs))},
+			{Key: "Edge Protocols  ", Value: "/cipher/chunk/1.0.0, /cipher/pull/1.0.0"},
+		}
+		log.Banner("CIPHER CONSUMER: ACTIVE EDGE SEEDER & CACHE", fields...)
+		log.Success("Consumer is actively listening and re-seeding content to peer swarm. Press Ctrl+C to stop.")
+
+		ch := make(chan os.Signal, 1)
+		signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+		<-ch
+		log.Warn("Shutting down consumer edge seeder...")
 	}
 }
+

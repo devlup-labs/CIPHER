@@ -10,9 +10,11 @@ import (
 
 // WorkerResult is the result of a worker attempting a chunk
 type WorkerResult struct {
-	Task   ChunkTask
-	Error  error
-	PeerID string // To track contribution
+	Task             ChunkTask
+	Error            error
+	PeerID           string // To track contribution
+	BytesTransferred int64
+	Duration         time.Duration
 }
 
 var TestThrottle time.Duration
@@ -35,9 +37,11 @@ func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *en
 			continue
 		}
 		
+		start := time.Now()
 		chunkData, err := client.FetchChunk(ctx, task.ChunkID)
+		dur := time.Since(start)
 		if err != nil {
-			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String(), Duration: dur}
 			continue
 		}
 
@@ -46,10 +50,10 @@ func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *en
 		}
 
 		if err := eng.PutChunk(ctx, chunkData); err != nil {
-			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String(), Duration: dur}
 			continue
 		}
 
-		results <- WorkerResult{Task: task, Error: nil, PeerID: source.PeerID.String()}
+		results <- WorkerResult{Task: task, Error: nil, PeerID: source.PeerID.String(), BytesTransferred: int64(len(chunkData.Data)), Duration: dur}
 	}
 }

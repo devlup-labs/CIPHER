@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"strings"
@@ -26,6 +25,7 @@ import (
 	"cipher/network/protocol/chunk"
 	"cipher/network/protocol/push"
 	"cipher/network/transport"
+	"cipher/shared/logger"
 
 	"crypto/ed25519"
 	"encoding/hex"
@@ -37,9 +37,10 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 )
 
-
 func main() {
 	golog.SetAllLoggers(golog.LevelWarn)
+
+	log := logger.Provider
 
 	port := flag.Int("p", 4001, "Port for the provider to listen on (TCP)")
 	wsPort := flag.Int("ws-port", 4002, "Port for the provider to listen on (WebSocket, 0 to disable)")
@@ -59,8 +60,8 @@ func main() {
 	entropyAddr := flag.String("entropy-addr", "", "CommitRevealEntropy contract address (hex)")
 	providerEthKey := flag.String("eth-key", "", "Provider Ethereum private key (hex, optional)")
 	enableAvailability := flag.Bool("availability", true, "Enable Availability challenge handler (/cipher/availability/1.0.0)")
+	roleName := flag.String("role-name", "Core Storage Provider", "Human-readable role name for this provider node")
 	_ = providerEthKey
-
 
 	flag.Parse()
 
@@ -96,7 +97,7 @@ func main() {
 		if err := discovery.Bootstrap(ctx, kdht, h, []peer.AddrInfo{*bootstrapInfo}); err != nil {
 			log.Fatalf("Failed to bootstrap DHT: %v", err)
 		}
-		log.Printf("[DHT] Bootstrap complete. Routing table has %d peers", len(kdht.RoutingTable().ListPeers()))
+		log.Sub("DHT").Success("Bootstrap complete. Routing table has %d peers", len(kdht.RoutingTable().ListPeers()))
 	}
 
 	// Connect to relay if specified
@@ -104,11 +105,11 @@ func main() {
 		relayInfo, err := peer.AddrInfoFromString(*relayAddr)
 		if err == nil {
 			if err := h.Connect(ctx, *relayInfo); err != nil {
-				log.Printf("Warning: Failed to connect to relay: %v", err)
+				log.Warn("Failed to connect to relay: %v", err)
 			} else {
 				if res, err := client.Reserve(ctx, h, *relayInfo); err == nil {
 					h.ConnManager().Protect(relayInfo.ID, "relay")
-					log.Printf("[✓] Connected to relay and reserved slot (expires: %s)", res.Expiration.String())
+					log.Success("Connected to relay and reserved slot (expires: %s)", res.Expiration.String())
 				}
 			}
 		}
@@ -128,13 +129,13 @@ func main() {
 	// Apply testing flags
 	if *corruptProb > 0 {
 		chunk.TestCorruptProb = *corruptProb
-		log.Printf("[TESTING] Corrupt probability set to %.2f", *corruptProb)
+		log.Warn("[TESTING] Corrupt probability set to %.2f", *corruptProb)
 	}
 
 	// 5. Register Data-Plane Stream Handler (/cipher/chunk/1.0.0)
 	streamHandler := chunk.NewStreamHandler(h, eng)
 	if *ethRPC != "" && *entropyAddr != "" {
-		log.Printf("[Payment] Configuring payment ticket verification against CommitRevealEntropy %s...", *entropyAddr)
+		log.Sub("Payment").Info("Configuring payment ticket verification against CommitRevealEntropy %s...", *entropyAddr)
 		ethClient, err := ethclient.DialContext(ctx, *ethRPC)
 		if err != nil {
 			log.Fatalf("Failed to dial Ethereum RPC: %v", err)
@@ -156,11 +157,12 @@ func main() {
 			defer ticketsMu.Unlock()
 
 			if !verifierSigner.Verify(ticket.Ticket, ticket.Signature, ticket.Ticket.Sender) {
+				log.Sub("Payment").Error("[SECURITY SHIELD] REJECTED FRAUDULENT TICKET from %s! Forged EIP-712 signature detected. Chunk transfer DENIED.", ticket.Ticket.Sender.Hex())
 				return fmt.Errorf("invalid ticket signature from %s", ticket.Ticket.Sender.Hex())
 			}
 
 			storedTickets = append(storedTickets, ticket)
-			log.Printf("[Payment] [✓] Received valid ticket #%d (Chunk Index %s, Value %s wei, from %s)",
+			log.Sub("Payment").Success("Received & verified authentic ticket #%d (Chunk #%s, Value %s wei, from %s)",
 				len(storedTickets), ticket.Ticket.LocalIndex.String(), ticket.Ticket.FaceValue.String(), ticket.Ticket.Sender.Hex())
 			return nil
 		})
@@ -220,31 +222,36 @@ func main() {
 					}
 
 					availability.NewAvailabilityStreamHandler(h, proofEngine, func(voucher payment.PaymentState) {
-						log.Printf("[Availability] [✓] Received signed payment voucher (Seq: %d, Cumulative: %d wei)",
+						log.Sub("Availability").Success("Received signed payment voucher (Seq: %d, Cumulative: %d wei)",
 							voucher.Sequence, voucher.CumulativePayment)
 					})
-					log.Printf("[Availability] Stream handler active on %s", availability.AvailabilityProtocolID)
+					log.Sub("Availability").Info("Stream handler active on %s", availability.AvailabilityProtocolID)
 				}
 			}
 		}
 	}
 
-	fmt.Println("\n================= CIPHER PROVIDER =================")
-
-	fmt.Printf("Provider Peer ID: %s\n", h.ID().String())
-	fmt.Printf("Store Location  : %s\n", *storePath)
-	fmt.Printf("Hosted Manifests: %d\n", len(manifests))
-	fmt.Println("Listening Addresses:")
-	for _, addr := range h.Addrs() {
-		fmt.Printf("  - %s/p2p/%s\n", addr.String(), h.ID().String())
+	fields := []logger.Field{
+		{Key: "Provider Role   ", Value: *roleName},
+		{Key: "Provider Peer ID", Value: h.ID().String()},
+		{Key: "Store Location  ", Value: *storePath},
+		{Key: "Hosted Manifests", Value: fmt.Sprintf("%d", len(manifests))},
+		{Key: "Push Ingestion  ", Value: fmt.Sprintf("%t (policy: %s)", *allowPush, *pushAuthPolicy)},
+		{Key: "", Value: "Listening Multiaddresses:"},
 	}
-	fmt.Println("===================================================")
-	log.Println("Provider is ready and serving content. Press Ctrl+C to stop.")
+	for _, addr := range h.Addrs() {
+		fields = append(fields, logger.Field{Key: "", Value: fmt.Sprintf("  - %s/p2p/%s", addr.String(), h.ID().String())})
+
+	}
+
+	log.Banner(fmt.Sprintf("CIPHER PROVIDER: %s", strings.ToUpper(*roleName)), fields...)
+	log.Success("Provider [%s] is ready and serving content. Press Ctrl+C to stop.", *roleName)
 
 	// Wait for OS shutdown signal
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 	<-ch
 
-	log.Println("Shutting down provider...")
+	log.Warn("Shutting down provider...")
 }
+

@@ -1,24 +1,24 @@
 package main
 
 import (
+	"cipher/network/identity"
+	"cipher/shared/logger"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"cipher/network/identity"
-
+	golog "github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
-	golog "github.com/ipfs/go-log/v2"
 )
 
 func main() {
-	// Enable libp2p debug logging for circuit v2
-	golog.SetLogLevel("relay", "debug")
-	golog.SetLogLevel("p2p-circuit", "debug")
+	golog.SetLogLevel("relay", "warn")
+	golog.SetLogLevel("p2p-circuit", "warn")
+
+	log := logger.Relay
 
 	// Load persistent identity for the relay
 	priv, err := identity.LoadOrCreate()
@@ -42,36 +42,37 @@ func main() {
 		log.Fatalf("Failed to create libp2p relay node: %v", err)
 	}
 
-	// Configure custom relay resources for development/testing.
-	// Production or public relays should stick to relay.DefaultResources() to prevent bandwidth abuse,
-	// as relay fallback connections are typically only intended for lightweight protocol coordination.
 	rc := relay.DefaultResources()
 	rc.Limit.Data = 512 * 1024 * 1024 // 512 MB data limit per connection
 	rc.Limit.Duration = 15 * time.Minute // 15 minute duration limit
 	rc.MaxReservations = 100
 
-	// Instantiate the circuit v2 relay service
 	_, err = relay.New(h, relay.WithResources(rc))
 	if err != nil {
 		log.Fatalf("Failed to instantiate relay service: %v", err)
 	}
 
-	log.Printf("Relay Service Started!")
-	log.Printf("Relay Peer ID: %s", h.ID().String())
-	
-	fmt.Println("\nRelay Multiaddresses (for other peers to connect):")
-	for _, addr := range h.Addrs() {
-		fmt.Printf("%s/p2p/%s\n", addr.String(), h.ID().String())
+	fields := []logger.Field{
+		{Key: "Node Role", Value: "Circuit Relay v2 Service"},
+		{Key: "Relay Peer ID", Value: h.ID().String()},
+		{Key: "Max Reservations", Value: "100"},
+		{Key: "Data Limit", Value: "512 MB / connection"},
+		{Key: "", Value: "Relay Multiaddresses (for other peers):"},
 	}
-	fmt.Println("\nTo deploy this relay publicly, replace the local IP (e.g., 127.0.0.1 or 192.168.x.x) above with your server's PUBLIC IP.")
+	for _, addr := range h.Addrs() {
+		fields = append(fields, logger.Field{Key: "", Value: fmt.Sprintf("  %s/p2p/%s", addr.String(), h.ID().String())})
+	}
 
-	// Wait for termination signal
+	log.Banner("CIPHER CIRCUIT RELAY V2", fields...)
+	log.Success("Relay node is operational and accepting peer reservations")
+
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 	<-ch
 
-	log.Println("Shutting down relay...")
+	log.Warn("Shutting down relay...")
 	if err := h.Close(); err != nil {
 		log.Fatalf("Failed to close host: %v", err)
 	}
 }
+

@@ -142,18 +142,16 @@ func (e *ProviderProofEngine) generateResponse(challenge availabilitytypes.Chall
 					copy(contentID[:], idBytes)
 					if mData, err := manifestStore.GetManifestBytes(ctx, contentID); err == nil {
 						if m, err := manifest.Deserialize(mData); err == nil {
-							var rawChunks [][]byte
-							for _, cid := range m.ChunkIDs {
-								if ch, err := e.chunkSource.GetChunk(ctx, cid); err == nil {
-									rawChunks = append(rawChunks, ch.Data)
-								}
+							leafHashes := make([][]byte, len(m.ChunkIDs))
+							for i, cid := range m.ChunkIDs {
+								leafHashes[i] = make([]byte, 32)
+								copy(leafHashes[i], cid[:])
 							}
-							if len(rawChunks) > 0 {
-								newTree, err := e.RegisterFileChunks(challenge.FileID, rawChunks)
-								if err == nil {
-									tree = newTree
-									ok = true
-								}
+							newTree, err := NewMerkleTree(leafHashes)
+							if err == nil {
+								_ = e.RegisterTree(challenge.FileID, newTree)
+								tree = newTree
+								ok = true
 							}
 						}
 					}

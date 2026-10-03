@@ -4,6 +4,33 @@ set -e
 ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )/../.." && pwd )"
 cd "$ROOT"
 
+compute_sha256() {
+    local file="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | awk '{print $1}'
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 "$file" | awk '{print $NF}'
+    else
+        echo "Error: No SHA-256 tool found" >&2
+        return 1
+    fi
+}
+
+kill_port() {
+    local port="$1"
+    if command -v lsof >/dev/null 2>&1; then
+        local pids
+        pids=$(lsof -ti tcp:"$port" -sTCP:LISTEN 2>/dev/null || lsof -ti :"$port" 2>/dev/null || true)
+        if [ -n "$pids" ]; then
+            kill -9 $pids 2>/dev/null || true
+        fi
+    elif command -v fuser >/dev/null 2>&1; then
+        fuser -k -n tcp "$port" >/dev/null 2>&1 || fuser -k "$port"/tcp >/dev/null 2>&1 || true
+    fi
+}
+
 echo "======================================================================"
 echo "      CIPHER E2E: P2P Chunk Transfer with Live Anvil Payment Settlement"
 echo "======================================================================"
@@ -13,11 +40,8 @@ rm -f provider.log publisher.log consumer.log anvil.log
 mkdir -p bin
 
 # 1. Kill any existing Anvil on port 8545
-if lsof -ti :8545 >/dev/null 2>&1; then
-    echo "[*] Killing existing process on port 8545..."
-    kill -9 $(lsof -ti :8545) 2>/dev/null || true
-    sleep 1
-fi
+kill_port 8545
+sleep 1
 
 # 2. Start Anvil in background
 echo "[*] Launching Anvil EVM node on 127.0.0.1:8545..."
@@ -68,7 +92,7 @@ echo "Provider Multiaddr: $PROV_ADDR"
 # 7. Generate test payload and push to Provider
 echo -e "\n[Step 4/6] Ingesting and Pushing 128 KiB test payload to Provider..."
 head -c 131072 </dev/urandom > test_orig.dat
-ORIG_HASH=$(shasum -a 256 test_orig.dat | awk '{print $1}')
+ORIG_HASH=$(compute_sha256 test_orig.dat)
 echo "Original SHA-256: $ORIG_HASH"
 
 ./bin/publisher -file test_orig.dat -providers "$PROV_ADDR" -push > publisher.log 2>&1
@@ -85,7 +109,7 @@ echo -e "\n[Step 5/6] Consumer downloading chunks with EIP-712 Micro-payment Tic
   --eth-rpc http://127.0.0.1:8545 --eth-key "$CLIENT_ETH_KEY" \
   --entropy-addr "$ENTROPY_ADDR" --provider-eth-addr "$PROVIDER_ETH_ADDR" > consumer.log 2>&1
 
-RECOVERED_HASH=$(shasum -a 256 test_recovered.dat | awk '{print $1}')
+RECOVERED_HASH=$(compute_sha256 test_recovered.dat)
 echo "Recovered SHA-256: $RECOVERED_HASH"
 
 if [ "$ORIG_HASH" != "$RECOVERED_HASH" ]; then

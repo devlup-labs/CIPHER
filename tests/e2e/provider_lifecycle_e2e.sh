@@ -4,6 +4,20 @@ set -e
 ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )/../.." && pwd )"
 cd "$ROOT"
 
+compute_sha256() {
+    local file="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | awk '{print $1}'
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 "$file" | awk '{print $NF}'
+    else
+        echo "Error: No SHA-256 tool found" >&2
+        return 1
+    fi
+}
+
 echo "======================================================================"
 echo "    CIPHER Lifecycle Test: Provider Independence & Persistence       "
 echo "======================================================================"
@@ -28,7 +42,7 @@ cp bin/consumer bin/client
 
 echo -e "\n[Step 2/6] Generating 2 MB test payload..."
 head -c 2097152 </dev/urandom > test_orig.dat
-ORIG_HASH=$(shasum -a 256 test_orig.dat | awk '{print $1}')
+ORIG_HASH=$(compute_sha256 test_orig.dat)
 echo "Original Payload SHA-256: $ORIG_HASH"
 
 echo -e "\n[Step 3/6] Starting DHT Bootstrap Node..."
@@ -62,7 +76,7 @@ echo "Provider running with Peer ID: $PROV_ID"
 echo -e "\n[Step 6/6] Consumer 1 retrieves content via DHT without Publisher online..."
 ./bin/consumer -fetch "$CONTENT_ID" -key "$KEY" -out test_recov1.dat -bootstrap "$BOOT_ADDR" -store ./store_client1 > client1.log 2>&1
 
-RECOV1_HASH=$(shasum -a 256 test_recov1.dat | awk '{print $1}')
+RECOV1_HASH=$(compute_sha256 test_recov1.dat)
 echo "Consumer 1 Downloaded SHA-256: $RECOV1_HASH"
 
 if [ "$ORIG_HASH" != "$RECOV1_HASH" ]; then
@@ -84,7 +98,7 @@ echo "✓ Provider restarted successfully."
 echo -e "\nConsumer 2 retrieving content after Provider restart..."
 ./bin/consumer -fetch "$CONTENT_ID" -key "$KEY" -out test_recov2.dat -bootstrap "$BOOT_ADDR" -store ./store_client2 > client2.log 2>&1
 
-RECOV2_HASH=$(shasum -a 256 test_recov2.dat | awk '{print $1}')
+RECOV2_HASH=$(compute_sha256 test_recov2.dat)
 echo "Consumer 2 Downloaded SHA-256: $RECOV2_HASH"
 
 if [ "$ORIG_HASH" != "$RECOV2_HASH" ]; then

@@ -28,9 +28,42 @@ else
 fi
 cd "$ROOT"
 
+# Cross-platform helpers
+compute_sha256() {
+    local file="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | awk '{print $1}'
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 "$file" | awk '{print $NF}'
+    else
+        echo "Error: No SHA-256 tool found (install sha256sum, shasum, or openssl)" >&2
+        return 1
+    fi
+}
+
+kill_port() {
+    local port="$1"
+    if command -v lsof >/dev/null 2>&1; then
+        local pids
+        pids=$(lsof -ti tcp:"$port" -sTCP:LISTEN 2>/dev/null || lsof -ti :"$port" 2>/dev/null || true)
+        if [ -n "$pids" ]; then
+            kill -9 $pids 2>/dev/null || true
+        fi
+    elif command -v fuser >/dev/null 2>&1; then
+        fuser -k -n tcp "$port" >/dev/null 2>&1 || fuser -k "$port"/tcp >/dev/null 2>&1 || true
+    fi
+}
+
 echo -e "${BOLD}${CYAN}======================================================================${NC}"
 echo -e "${BOLD}${CYAN}      🚀 CIPHER: MASTER INTEGRATION & WORKFLOW TEST HARNESS          ${NC}"
 echo -e "${BOLD}${CYAN}======================================================================${NC}"
+echo -e "${YELLOW}[!] NOTICE FOR LOCAL TESTING:${NC}"
+echo -e "    Local testing and multi-role simulation must be performed against the"
+echo -e "    ${BOLD}'local'${NC} branch of ${BOLD}devlup-labs/CIPHER${NC}:"
+echo -e "    ${CYAN}https://github.com/devlup-labs/CIPHER/tree/local${NC}"
+echo -e "----------------------------------------------------------------------"
 
 # Check prerequisites
 for cmd in go forge cast anvil; do
@@ -120,11 +153,8 @@ echo -e "${GREEN}[✓] All Availability cross-domain integration and adversarial
 echo -e "\n${BOLD}${CYAN}--- [PHASE 4/5] INITIALIZING LIVE ANVIL EVM ON 127.0.0.1:8545 ---${NC}"
 
 # Clear any stale port binding
-if lsof -ti :8545 >/dev/null 2>&1; then
-    echo -e "${YELLOW}[*] Killing existing process on port 8545...${NC}"
-    kill -9 $(lsof -ti :8545) 2>/dev/null || true
-    sleep 1
-fi
+kill_port 8545
+sleep 1
 
 # Launch Anvil
 anvil --port 8545 --silent > anvil.log 2>&1 &
@@ -175,7 +205,7 @@ echo -e "  - Provider Multiaddr:  ${BOLD}$PROV_ADDR${NC}"
 
 # Seed 128 KiB test payload
 head -c 131072 </dev/urandom > test_orig.dat
-ORIG_HASH=$(shasum -a 256 test_orig.dat | awk '{print $1}')
+ORIG_HASH=$(compute_sha256 test_orig.dat)
 echo -e "  - Original SHA-256:    ${BOLD}$ORIG_HASH${NC}"
 
 echo -e "${BOLD}[*] Ingesting, pushing content, and verifying availability challenge...${NC}"
@@ -199,7 +229,7 @@ echo -e "${BOLD}[*] Consumer downloading chunks while issuing signed EIP-712 pay
   --entropy-addr "$ENTROPY_ADDR" --provider-eth-addr "$PROVIDER_ETH_ADDR" > consumer.log 2>&1
 
 # Verify integrity
-RECOVERED_HASH=$(shasum -a 256 test_recovered.dat | awk '{print $1}')
+RECOVERED_HASH=$(compute_sha256 test_recovered.dat)
 if [ "$ORIG_HASH" != "$RECOVERED_HASH" ]; then
     echo -e "${RED}[❌ FAILED] Data hash mismatch between original and recovered files!${NC}"
     exit 1
