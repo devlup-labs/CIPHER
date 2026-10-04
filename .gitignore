@@ -43,3 +43,6 @@ target/
 .gocache/
 cache/
 
+# Test completion signals
+.*_done
+

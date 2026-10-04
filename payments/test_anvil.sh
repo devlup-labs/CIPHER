@@ -1,16 +1,26 @@
 #!/usr/bin/env bash
 set -e
 
+kill_port() {
+    local port="$1"
+    if command -v lsof >/dev/null 2>&1; then
+        local pids
+        pids=$(lsof -ti tcp:"$port" -sTCP:LISTEN 2>/dev/null || lsof -ti :"$port" 2>/dev/null || true)
+        if [ -n "$pids" ]; then
+            kill -9 $pids 2>/dev/null || true
+        fi
+    elif command -v fuser >/dev/null 2>&1; then
+        fuser -k -n tcp "$port" >/dev/null 2>&1 || fuser -k "$port"/tcp >/dev/null 2>&1 || true
+    fi
+}
+
 echo "=================================================="
 echo "🚀 STARTING LOCAL ANVIL EVM TESTBED"
 echo "=================================================="
 
 # 1. Kill any stale anvil processes on port 8545
-if lsof -ti :8545 >/dev/null 2>&1; then
-    echo "[*] Killing existing process on port 8545..."
-    kill -9 $(lsof -ti :8545) 2>/dev/null || true
-    sleep 1
-fi
+kill_port 8545
+sleep 1
 
 # 2. Start Anvil in background
 echo "[*] Spawning Anvil node on 127.0.0.1:8545..."

@@ -131,6 +131,9 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 
 	// Tracking metrics
 	peerContributions := make(map[string]int)
+	peerBytes := make(map[string]int64)
+	peerDurations := make(map[string]time.Duration)
+	transferStartTime := time.Now()
 
 	// 6. Handle Progress
 	for res := range completions {
@@ -141,6 +144,8 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 		
 		if res.PeerID != "" {
 			peerContributions[res.PeerID]++
+			peerBytes[res.PeerID] += res.BytesTransferred
+			peerDurations[res.PeerID] += res.Duration
 		}
 
 		if err := tm.SessionManager.Save(sess); err != nil {
@@ -150,13 +155,39 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 		fmt.Printf("\r\033[K[Progress] %d/%d chunks (%.1f%%)", completedCount, sess.TotalChunks, float64(completedCount)/float64(sess.TotalChunks)*100)
 	}
 
+	totalDuration := time.Since(transferStartTime)
 	fmt.Println()
 	if sess.TotalChunks > 0 {
-		fmt.Println("\n--- Peer Contribution Metrics ---")
-		for peerID, count := range peerContributions {
-			fmt.Printf("Peer %s: %d chunks (%.1f%%)\n", peerID, count, float64(count)/float64(sess.TotalChunks)*100)
+		var totalBytes int64
+		for _, b := range peerBytes {
+			totalBytes += b
 		}
-		fmt.Println("---------------------------------")
+
+		fmt.Println("\n+---------------------------------------------------------------------------------------------------------+")
+		fmt.Println("|                                    SWARM RETRIEVAL METRICS TABLE                                        |")
+		fmt.Println("+------------------------------------+---------------+-------------+---------------+----------------------+")
+		fmt.Println("| Provider Peer ID                   | Chunks (Qty)  | Ratio (%)   | Volume (KB)   | Time Taken (ms)      |")
+		fmt.Println("+------------------------------------+---------------+-------------+---------------+----------------------+")
+		for peerID, count := range peerContributions {
+			pct := float64(count) / float64(sess.TotalChunks) * 100
+			kb := float64(peerBytes[peerID]) / 1024.0
+			durMs := peerDurations[peerID].Milliseconds()
+			fmt.Printf("| %-34s | %-13s | %-11s | %-13s | %-20s |\n",
+				peerID,
+				fmt.Sprintf("%d chunks", count),
+				fmt.Sprintf("%.1f%%", pct),
+				fmt.Sprintf("%.1f KB", kb),
+				fmt.Sprintf("%d ms", durMs),
+			)
+		}
+		fmt.Println("+------------------------------------+---------------+-------------+---------------+----------------------+")
+		fmt.Printf("| TOTAL RECONSTRUCTED                | %-13s | %-11s | %-13s | Overall: %-11s |\n",
+			fmt.Sprintf("%d chunks", completedCount),
+			"100.0%",
+			fmt.Sprintf("%.1f KB", float64(totalBytes)/1024.0),
+			fmt.Sprintf("%d ms", totalDuration.Milliseconds()),
+		)
+		fmt.Println("+------------------------------------+---------------+-------------+---------------+----------------------+")
 	}
 
 	schedErr := <-errCh

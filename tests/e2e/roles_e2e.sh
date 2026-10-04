@@ -4,6 +4,20 @@ set -e
 ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )/../.." && pwd )"
 cd "$ROOT"
 
+compute_sha256() {
+    local file="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | awk '{print $1}'
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 "$file" | awk '{print $NF}'
+    else
+        echo "Error: No SHA-256 tool found" >&2
+        return 1
+    fi
+}
+
 echo "=========================================================="
 echo "         CIPHER Role-Based Architecture Test             "
 echo "=========================================================="
@@ -22,7 +36,7 @@ go build -o bin/bootstrap ./network/cmd/bootstrap
 
 echo "[2/4] Generating test payload..."
 head -c 1048576 </dev/urandom > test_input.dat
-ORIGINAL_HASH=$(shasum -a 256 test_input.dat | awk '{print $1}')
+ORIGINAL_HASH=$(compute_sha256 test_input.dat)
 echo "Payload SHA-256: $ORIGINAL_HASH (1 MB)"
 
 echo "[3/5] Starting Publisher to ingest and seed content..."
@@ -53,7 +67,7 @@ echo "  - Address:   $PUB_ADDR"
 echo "[4/5] Running Consumer to fetch, verify, and reassemble content..."
 ./bin/consumer -p 55001 -ws-port 55002 -identity ./store_client/identity.key -store ./store_client -d "$PUB_ADDR" -fetch "$CONTENT_ID" -key "$KEY" -out test_output.dat > client.log 2>&1
 
-DOWNLOADED_HASH=$(shasum -a 256 test_output.dat | awk '{print $1}')
+DOWNLOADED_HASH=$(compute_sha256 test_output.dat)
 echo "Downloaded SHA-256: $DOWNLOADED_HASH"
 
 if [ "$ORIGINAL_HASH" != "$DOWNLOADED_HASH" ]; then
@@ -85,7 +99,7 @@ sleep 3
 # Run Consumer using ONLY DHT discovery (no direct -d flag)
 ./bin/consumer -p 55010 -ws-port 55011 -identity ./store_client2/identity.key -store ./store_client2 -bootstrap "$BOOT_ADDR" -fetch "$CONTENT_ID" -key "$KEY" -out test_output_dht.dat > client_dht.log 2>&1
 
-DHT_DOWNLOADED_HASH=$(shasum -a 256 test_output_dht.dat | awk '{print $1}')
+DHT_DOWNLOADED_HASH=$(compute_sha256 test_output_dht.dat)
 echo "DHT Downloaded SHA-256: $DHT_DOWNLOADED_HASH"
 
 if [ "$ORIGINAL_HASH" != "$DHT_DOWNLOADED_HASH" ]; then
